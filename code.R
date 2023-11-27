@@ -8,7 +8,7 @@ library(tidybayes)
 # Read in Manifesto Project data and process
 
 #mp <- read_csv("MPDataset_MPDS2023a.csv")
-mp <- mp_maindataset(apikey = "14b0226add0412d49e1fc8edaccc47cc")
+mp <- mp_maindataset(apikey = "APIKEY")
 mp$year <- year(as.Date(mp$edate, format = "%d/%m/%Y"))
 mp <- mp %>% 
   distinct(partyname, countryname, year, .keep_all = TRUE)
