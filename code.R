@@ -8,7 +8,7 @@ library(tidybayes)
 # Read in Manifesto Project data and process
 
 #mp <- read_csv("MPDataset_MPDS2023a.csv")
-mp <- mp_maindataset(apikey = "APIKEY")
+mp <- mp_maindataset(apikey = "14b0226add0412d49e1fc8edaccc47cc")
 mp$year <- year(as.Date(mp$edate, format = "%d/%m/%Y"))
 mp <- mp %>% 
   distinct(partyname, countryname, year, .keep_all = TRUE)
@@ -42,23 +42,43 @@ mp_matched <- mp_matched %>%
   mutate(es_cat = case_when(elecrule %in% c(1, 2, 3, 4, 5, 6, 7) ~ "Majoritarian",
                             elecrule %in% c(8, 9, 10) ~ "Proportional",
                             TRUE ~ "Mixed"))
+# Add COW codes
+library(fuzzyjoin)
+cow_codes <- countrycode::codelist
+
+cow_codes <- cow_codes %>% 
+  mutate(cown = case_when(country.name.en == "Serbia" ~ 345, 
+                          TRUE ~ cown)) %>%
+  select(country.name.en.regex, cown) 
+
+mp_matched <- mp_matched %>% 
+  mutate(countryname_lower = tolower(countryname)) %>%
+  regex_left_join(cow_codes, by = c("countryname_lower" = "country.name.en.regex"))
 
 # Read in cabinet data
-whogov <- read_csv("WhoGov_within_V2.0.csv")
+Sys.setlocale( 'LC_ALL','C' ) 
+
+whogov <- read_csv("WhoGov_within_V2.0.csv")%>%
+  mutate(country_name = case_when(grepl("trinidad", country_name, ignore.case=TRUE) ~ "Trinidad and Tobego", 
+                                                                            TRUE ~ country_name)) %>%
+  mutate(country_name_lower = tolower(country_name)) %>% 
+  regex_left_join(cow_codes, by = c("country_name_lower" = "country.name.en.regex")) %>% 
+  select(-country_name_lower)
 
 # Create cabinet counts and percentages
 whogov %>% 
   #filter(!is.na(prestige_1)) %>% 
   filter(!is.na(partyfacts_id)) %>%
-  count(year, partyfacts_id, country_name) %>% 
+  count(year, partyfacts_id, country_name, cown) %>% 
   mutate(year_lagged = year - 1) -> whogov_counts
 
+
 whogov_year_counts <- whogov_counts %>% 
-  group_by(year, country_name) %>% 
+  group_by(year, cown) %>% 
   summarize(sum_year_cab = sum(n))# 
 
 whogov_counts <- whogov_counts %>% 
-  left_join(whogov_year_counts, by = c("country_name", "year"))
+  left_join(whogov_year_counts, by = c("cown", "year"))
 
 whogov_counts <- whogov_counts %>% 
   mutate(cab_pct = n/sum_year_cab)
@@ -88,15 +108,16 @@ mp_matched_whogov <- mp_matched %>%
   distinct(partyfacts_id, year, countryname, .keep_all = TRUE) 
 
 mp_matched_whogov %>% 
-  count(countryname, year) %>% 
+  count(cown.x, year) %>% 
   rename(country_count = n) -> country_party_counts
 
 mp_matched_whogov <- mp_matched_whogov %>%
-  left_join(country_party_counts, by = c("countryname" = "countryname", "year" = "year"))
+  left_join(country_party_counts, by = c("cown.x" = "cown.x", "year" = "year"))
 
 # Adding controls
 
-up <- read_csv("unemployment.csv")
+up <- read_csv("unemployment.csv") 
+  
 
 up <- up %>% 
   pivot_longer(cols = `1960`:`2022`, names_to = "year", values_to = "unemployment") %>% 
@@ -104,7 +125,10 @@ up <- up %>%
   mutate(year = as.numeric(year)) %>% 
   mutate(`Country Name` = case_when(`Country Name` == "Czechia" ~ "Czech Repubic",
                                     `Country Name` == "Slovak Republic" ~ "Slovakia",
-                                    TRUE ~ `Country Name`))
+                                    TRUE ~ `Country Name`)) %>% 
+  mutate(country_name_lower = tolower(`Country Name`)) %>% 
+  regex_left_join(cow_codes, by = c("country_name_lower" = "country.name.en.regex"))
+  
 
 
 gdp <- read_csv("gdppercap.csv", skip = 4) %>% 
@@ -113,33 +137,44 @@ gdp <- read_csv("gdppercap.csv", skip = 4) %>%
   mutate(year = as.numeric(year)) %>% 
   mutate(`Country Name` = case_when(`Country Name` == "Czechia" ~ "Czech Repubic",
                                     `Country Name` == "Slovak Republic" ~ "Slovakia",
-                                    TRUE ~ `Country Name`))
+                                    TRUE ~ `Country Name`)) %>% 
+  mutate(country_name_lower = tolower(`Country Name`)) %>% 
+  regex_left_join(cow_codes, by = c("country_name_lower" = "country.name.en.regex"))
+
+
+
 
 mig <- read_csv("migration_flows.csv") %>% 
   mutate(`Region, subregion, country or area *` = case_when(`Region, subregion, country or area *` == "Czechia" ~ "Czech Republic",
-                             TRUE ~ `Region, subregion, country or area *`))
+                             TRUE ~ `Region, subregion, country or area *`)) 
 
 mig <- mig %>% 
   select(country = `Region, subregion, country or area *`, 
-         Year, netmig = `Net Migration Rate (per 1,000 population)`)
+         Year, netmig = `Net Migration Rate (per 1,000 population)`) %>% 
+  mutate(country_name_lower = tolower(`country`)) %>% 
+  regex_left_join(cow_codes, by = c("country_name_lower" = "country.name.en.regex"))
+
 
 mp_matched_whogov <- mp_matched_whogov %>% 
-  left_join(mig, by = c("countryname" = "country", "year" = "Year"))
+  left_join(mig, by = c("cown.x" = "cown", "year" = "Year"))
 
 mp_matched_whogov <- mp_matched_whogov %>% 
-  left_join(up, by = c("countryname" = "Country Name", "year" = "year"))
+  left_join(up, by = c("cown.x" = "cown", "year" = "year"))
 
 mp_matched_whogov <- mp_matched_whogov %>% 
-  left_join(gdp, by = c("countryname" = "Country Name", "year" = "year"))
+  left_join(gdp, by = c("cown.x" = "cown", "year" = "year"))
 
 mp_matched_whogov$netmig <- as.numeric(mp_matched_whogov$netmig)
 
 polity <- readxl::read_xls("p5v2018.xls") %>% 
   mutate(year_plus = year + 1) %>% 
-  select(country, year_plus, polity2)
+  select(country, year_plus, polity2) %>%
+  mutate(country_name_lower = tolower(country)) %>% 
+  regex_left_join(cow_codes, by = c("country_name_lower" = "country.name.en.regex"))
+
 
 mp_matched_whogov <- mp_matched_whogov %>% 
-  left_join(polity, by = c("countryname" = "country", "year" = "year_plus"))
+  left_join(polity, by = c("cown.x" = "cown", "year" = "year_plus"))
 
 # Far-right parties in Populist
 
@@ -161,7 +196,8 @@ mp_matched_whogov_populist_country <- mp_matched_whogov_populist %>%
             es_cat = max(es_cat), cab_pct = sum(cab_pct), seat_pct = sum(seat_pct), polity2 = max(polity2), pervote = sum(pervote)) %>% 
   ungroup()
 
-
+mp_matched_whogov <- mp_matched_whogov %>% 
+  distinct(partyfacts_id, year, cown.x, .keep_all = TRUE) 
 # Filter by rile quantities
 mp_matched_whogov_quantiles_rile <- mp_matched_whogov %>% 
   #filter(western_europe == TRUE) %>%
@@ -174,21 +210,21 @@ mp_matched_whogov_quantiles_logit <- mp_matched_whogov %>%
   #filter(western_europe == TRUE) %>%
   group_by(es_cat) %>% 
   arrange(desc(logit_rile)) %>% 
-  filter(rile > quantile(logit_rile, .9, na.rm = TRUE)) %>%
+  filter(logit_rile > quantile(logit_rile, .9, na.rm = TRUE)) %>%
   ungroup()
 
 mp_matched_whogov_quantiles_franz <- mp_matched_whogov %>% 
   #filter(western_europe == TRUE) %>%
   group_by(es_cat) %>% 
   arrange(desc(franzmann_rile)) %>% 
-  filter(rile > quantile(franzmann_rile, .9, na.rm = TRUE)) %>%
+  filter(franzmann_rile > quantile(franzmann_rile, .9, na.rm = TRUE)) %>%
   ungroup()
 
 mp_matched_whogov_quantiles_tri <- mp_matched_whogov %>% 
   #filter(western_europe == TRUE) %>%
   group_by(es_cat) %>% 
   arrange(desc(tripartite_rw)) %>% 
-  filter(rile > quantile(tripartite_rw, .9, na.rm = TRUE)) %>%
+  filter(tripartite_rw > quantile(tripartite_rw, .9, na.rm = TRUE)) %>%
   ungroup()
 
 mp_matched_whogov_rile_country <- mp_matched_whogov_quantiles_rile %>% 
@@ -219,7 +255,7 @@ mp_matched_whogov_populist_country <- mp_matched_whogov_populist_country %>%
                                    TRUE ~ "Majoritarian/Mixed")) 
 
 mp_matched_whogov_populist_country$pervote <- mp_matched_whogov_populist_country$pervote / 100
-  
+
 populist_vote <- plm(pervote ~ maj_indicator + country_count + unemployment + netmig + log(gdppercap) + polity2, data = mp_matched_whogov_populist_country, index=c("countryname", "year"), model="within")
 populist_seat <- plm(seat_pct ~ maj_indicator + country_count + unemployment + netmig + log(gdppercap) + polity2, data = mp_matched_whogov_populist_country, index=c("countryname", "year"), model="within")
 populist_cab <- plm(cab_pct ~ maj_indicator + country_count + unemployment + netmig + log(gdppercap) + polity2, data = mp_matched_whogov_populist_country, index=c("countryname", "year"), model="within")
@@ -258,7 +294,7 @@ marginaleffects::avg_slopes(fit_ord_est_seat) %>%
                align=c('llccc'))
 
 
-marginaleffects::plot_slopes(fit_ord_est, variables = "es_cat", condition = c("netmig"))
+# marginaleffects::plot_slopes(fit_ord_est, variables = "es_cat", condition = c("netmig"))
 
 stargazer::stargazer(populist_vote, populist_seat, populist_cab)
 
@@ -284,15 +320,15 @@ fit_ord_est_cab_rile <- ordbetareg(cab_pct ~ es_cat + country_count + unemployme
                           data=mp_matched_whogov_rile_country,
                           chains=18, cores = 18, iter=10000,refresh=0)
 
-marginaleffects::avg_slopes(fit_ord_est) %>%
-  select(Variable="term",
-         Level="contrast",
-         `5% Quantile`="conf.low",
-         `Posterior Mean`="estimate",
-         `95% Quantile`="conf.high") %>% 
-  knitr::kable(caption = "Marginal Effect of Electoral System on Far-Right Cabinet Share",
-               format.args=list(digits=2),
-               align=c('llccc'), format = "latex")
+# marginaleffects::avg_slopes(fit_ord_est) %>%
+#   select(Variable="term",
+#          Level="contrast",
+#          `5% Quantile`="conf.low",
+#          `Posterior Mean`="estimate",
+#          `95% Quantile`="conf.high") %>% 
+#   knitr::kable(caption = "Marginal Effect of Electoral System on Far-Right Cabinet Share",
+#                format.args=list(digits=2),
+#                align=c('llccc'), format = "latex")
 
 
 # Logit-scale DV models
@@ -313,18 +349,18 @@ fit_ord_est_cab_logit <- ordbetareg(cab_pct ~ es_cat + country_count + unemploym
                                    data=mp_matched_whogov_logit_country,
                                    chains=18, cores = 18, iter=10000,refresh=0)
 
-plots <- pp_check_ordbeta(fit_ord_est_cab_logit,
-                          ndraws=100,
-                          outcome_label="Cabinet Share",
-                          new_theme=ggthemes::theme_economist())
+# plots <- pp_check_ordbeta(fit_ord_est_cab_logit,
+#                           ndraws=100,
+#                           outcome_label="Cabinet Share",
+#                           new_theme=ggthemes::theme_economist())
 
 
-marginaleffects::avg_slopes(fit_ord_est_seat_logit) %>%
+avg_slopes_logit %>%
   select(Variable="term",
          Level="contrast",
          `5% Quantile`="conf.low",
          `Posterior Mean`="estimate",
-         `95% Quantile`="conf.high") %>% 
+         `95% Quantile`="conf.high") %>%
   knitr::kable(caption = "Marginal Effect of Electoral System on Far-Right Seat Share",
                format.args=list(digits=2),
                align=c('llccc'))
@@ -335,16 +371,16 @@ tri_vote <- plm(pervote ~ es_cat + country_count + unemployment + netmig + log(g
 tri_seat <- plm(seat_pct ~ es_cat + country_count + unemployment + netmig + log(gdppercap) + polity2, data = mp_matched_whogov_tri_country, index=c("countryname", "year"), model="within")
 tri_cab <- plm(cab_pct ~ es_cat + country_count + unemployment + netmig + log(gdppercap) + polity2, data = mp_matched_whogov_tri_country, index=c("countryname", "year"), model="within")
 
-summary(logit_cab)
+summary(tri_cab)
 
 stargazer::stargazer(tri_vote, tri_seat, tri_cab)
 
 fit_ord_est_seat_tri <- ordbetareg(seat_pct ~ es_cat + country_count + unemployment + netmig + log(gdppercap) + polity2,
-                                     data=mp_matched_whogov_logit_country,
+                                     data=mp_matched_whogov_tri_country,
                                      chains=18, cores = 18, iter=10000,refresh=0)
 
 fit_ord_est_cab_tri <- ordbetareg(cab_pct ~ es_cat + country_count + unemployment + netmig + log(gdppercap) + polity2,
-                                    data=mp_matched_whogov_logit_country,
+                                    data=mp_matched_whogov_tri_country,
                                     chains=18, cores = 18, iter=10000,refresh=0)
 
 
@@ -356,12 +392,14 @@ avg_slopes_rile_cab <- marginaleffects::avg_slopes(fit_ord_est_cab_rile)
 avg_slopes_logit_cab <- marginaleffects::avg_slopes(fit_ord_est_cab_logit)
 avg_slopes_tri_cab <- marginaleffects::avg_slopes(fit_ord_est_cab_tri)
 
+avg_slopes_populist <- marginaleffects::avg_slopes(fit_ord_est_seat)
+avg_slopes_populist_cab <- marginaleffects::avg_slopes(fit_ord_est)
 
 
 avg_slopes_logit %>%
   mutate(method = "Logit Scale") %>% 
   rbind(avg_slopes_rile %>% mutate(method = "Rile Scale")) %>% 
-  rbind(avg_slopes_tri %>% mutate(method = "Tripartite Scale")) %>%
+  rbind(avg_slopes_tri %>% mutate(method = "Tripartite Scale")) 
   mutate(variable = case_when(term == "es_cat" ~ contrast,
                               TRUE ~ term)) %>% 
   mutate(variable = case_when(variable == "polity2" ~ "Polity Score",
@@ -390,7 +428,7 @@ avg_slopes_logit_cab %>%
                               variable == "netmig" ~ "Net Migration",
                               variable == "country_count" ~ "Number of Parties Active",
                               variable == "unemployment" ~ "Unemployment",
-                              variable == "gdppercap" ~ "log(GDP Per Capita", 
+                              variable == "gdppercap" ~ "log(GDP Per Capita)", 
                               TRUE ~ variable)) %>% 
   ggplot(aes(x=reorder(variable, -estimate), y=estimate, color = method)) + 
   geom_point(position = position_dodge(width = .9)) +
@@ -400,3 +438,8 @@ avg_slopes_logit_cab %>%
        y = "Beta Regression Marginal Effect Estimate", 
        title = "Ordered Beta Estimates Across Numeric Methods of Far-Right Classification", 
        color = "Classification Method")
+
+
+
+
+
